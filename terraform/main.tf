@@ -108,3 +108,49 @@ module "alb" {
   # otherwise AWS rejects the access-log setting.
   depends_on = [module.s3]
 }
+
+# Zip the app folder and upload it to the app bucket
+data "archive_file" "app" {
+  type        = "zip"
+  source_dir  = "${path.root}/../app"
+  output_path = "${path.root}/app.zip"
+}
+
+resource "aws_s3_object" "app" {
+  bucket = module.s3.app_bucket_name
+  key    = "releases/app.zip"
+  source = data.archive_file.app.output_path
+  etag   = data.archive_file.app.output_md5
+}
+
+module "compute" {
+  source = "./modules/compute"
+
+  project               = var.project
+  app_subnet_ids        = module.network.app_subnet_ids
+  ec2_sg_id             = module.security.ec2_sg_id
+  instance_profile_name = module.iam.instance_profile_name
+  target_group_arn      = module.alb.target_group_arn
+
+  instance_type    = var.instance_type
+  min_size         = var.asg_min_size
+  desired_capacity = var.asg_desired_capacity
+  max_size         = var.asg_max_size
+
+  app_port        = var.app_port
+  region          = var.aws_region
+  secret_name     = local.secret_name
+  app_bucket_name = module.s3.app_bucket_name
+  app_s3_key      = aws_s3_object.app.key
+  app_version     = data.archive_file.app.output_md5
+
+  # Servers must start only after the network path (NAT), database,
+  # filled-in secret, app package and load balancer all exist.
+  depends_on = [
+    module.network,
+    module.rds,
+    aws_secretsmanager_secret_version.db,
+    aws_s3_object.app,
+    module.alb,
+  ]
+}

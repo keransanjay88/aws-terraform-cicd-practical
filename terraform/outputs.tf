@@ -41,3 +41,7 @@ output "alb_dns_name" {
 output "app_url" {
   value = "https://${module.alb.dns_name}"
 }
+
+output "asg_name" {
+  value = module.compute.asg_name
+}
