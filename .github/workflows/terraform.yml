@@ -1,0 +1,238 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "app/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "app/**"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to run"
+        type: choice
+        options:
+          - apply
+          - destroy
+        default: apply
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.15.7" 
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Static checks (pull requests only, no AWS access needed)
+  # ------------------------------------------------------------------
+  checks:
+    name: Format, validate, lint, scan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: checks-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive -diff
+        working-directory: terraform
+
+      - name: Terraform init (no backend)
+        run: terraform init -backend=false -input=false
+        working-directory: terraform
+
+      - name: Terraform validate
+        run: terraform validate
+        working-directory: terraform
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: tflint
+        run: tflint --chdir=terraform --recursive --minimum-failure-severity=error
+
+      - name: Checkov security scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          quiet: true
+          soft_fail: true # findings are reviewed and documented, not blocking
+
+  # ------------------------------------------------------------------
+  # 2. Plan on pull requests (read-only role) and comment on the PR
+  # ------------------------------------------------------------------
+  plan:
+    name: Plan
+    if: github.event_name == 'pull_request'
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC, read-only role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-plan
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        run: |
+          terraform plan -input=false -no-color -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Comment plan on the pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('terraform/plan.txt', 'utf8');
+            if (plan.length > 60000) {
+              plan = plan.slice(0, 60000) + '\n... (truncated, see the workflow log)';
+            }
+            const body = '### Terraform plan\n```\n' + plan + '\n```';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  # ------------------------------------------------------------------
+  # 3. Apply (after manual approval) and validate the live deployment
+  # ------------------------------------------------------------------
+  apply:
+    name: Apply and validate
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
+    runs-on: ubuntu-latest
+    environment: production # <-- the manual approval gate
+    concurrency:
+      group: terraform-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC, apply role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-apply
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -input=false -no-color tfplan
+
+      - name: Post-deploy health checks
+        run: |
+          URL=$(terraform output -raw app_url)
+          HOST=$(terraform output -raw alb_dns_name)
+          echo "App URL: $URL"
+
+          echo "Waiting for /health to return 200 over HTTPS..."
+          ok=0
+          for i in $(seq 1 30); do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' "$URL/health" || true)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            sleep 10
+          done
+          [ "$ok" = "1" ] || { echo "FAIL: /health never returned 200"; exit 1; }
+
+          echo "Checking HTTP redirects to HTTPS..."
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://$HOST/" || true)
+          [ "$code" = "301" ] || { echo "FAIL: expected 301, got $code"; exit 1; }
+
+          echo "Checking secret, database and S3 (/health/deep)..."
+          code=$(curl -sk -o deep.json -w '%{http_code}' "$URL/health/deep" || true)
+          cat deep.json; echo
+          [ "$code" = "200" ] || { echo "FAIL: /health/deep returned $code"; exit 1; }
+
+          echo "### Deployment healthy" >> "$GITHUB_STEP_SUMMARY"
+          echo "URL: $URL (self-signed certificate: the browser will warn)" >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------
+  # 4. Destroy (manual run only, after approval)
+  # ------------------------------------------------------------------
+  destroy:
+    name: Destroy everything
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: terraform-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC, apply role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-destroy
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform destroy
+        run: terraform destroy -input=false -no-color -auto-approve
