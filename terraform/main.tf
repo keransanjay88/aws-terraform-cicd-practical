@@ -85,3 +85,9 @@ resource "aws_secretsmanager_secret_version" "db" {
     engine   = "mysql"
   })
 }
+
+module "acm" {
+  source = "./modules/acm"
+
+  project = var.project
+}

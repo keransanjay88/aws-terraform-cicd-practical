@@ -29,3 +29,7 @@ output "logs_bucket_name" {
 output "rds_endpoint" {
   value = module.rds.address
 }
+
+output "certificate_arn" {
+  value = module.acm.certificate_arn
+}
