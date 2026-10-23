@@ -62,13 +62,13 @@ module "s3" {
 module "rds" {
   source = "./modules/rds"
 
-  project       = var.project
-  db_subnet_ids = module.network.db_subnet_ids
-  rds_sg_id     = module.security.rds_sg_id
-  db_name       = module.secrets.db_name
-  db_username   = module.secrets.db_username
-  db_password   = module.secrets.db_password
-  multi_az      = var.db_multi_az
+  project        = var.project
+  db_subnet_ids  = module.network.db_subnet_ids
+  rds_sg_id      = module.security.rds_sg_id
+  db_name        = module.secrets.db_name
+  db_username    = module.secrets.db_username
+  db_password    = module.secrets.db_password
+  multi_az       = var.db_multi_az
   instance_class = var.db_instance_class
 }
 
