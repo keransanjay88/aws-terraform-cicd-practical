@@ -91,3 +91,20 @@ module "acm" {
 
   project = var.project
 }
+
+module "alb" {
+  source = "./modules/alb"
+
+  project           = var.project
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+  alb_sg_id         = module.security.alb_sg_id
+  certificate_arn   = module.acm.certificate_arn
+  app_port          = var.app_port
+  logs_bucket_name  = module.s3.logs_bucket_name
+  logs_prefix       = module.s3.alb_logs_prefix
+
+  # The logs bucket policy must exist before the ALB is created,
+  # otherwise AWS rejects the access-log setting.
+  depends_on = [module.s3]
+}

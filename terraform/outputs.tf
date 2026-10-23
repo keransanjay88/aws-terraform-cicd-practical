@@ -33,3 +33,11 @@ output "rds_endpoint" {
 output "certificate_arn" {
   value = module.acm.certificate_arn
 }
+
+output "alb_dns_name" {
+  value = module.alb.dns_name
+}
+
+output "app_url" {
+  value = "https://${module.alb.dns_name}"
+}
