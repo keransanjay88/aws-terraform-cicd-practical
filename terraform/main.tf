@@ -44,3 +44,9 @@ module "iam" {
   secret_arn_pattern = local.secret_arn_pattern
   app_bucket_arn     = "arn:aws:s3:::${local.app_bucket_name}"
 }
+
+module "secrets" {
+  source = "./modules/secrets"
+
+  secret_name = local.secret_name
+}
