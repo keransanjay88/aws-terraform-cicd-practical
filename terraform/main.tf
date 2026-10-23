@@ -17,3 +17,11 @@ module "network" {
   db_subnet_cidrs     = ["10.0.21.0/24", "10.0.22.0/24"]
   nat_count           = var.nat_count
 }
+
+module "security" {
+  source = "./modules/security"
+
+  project  = var.project
+  vpc_id   = module.network.vpc_id
+  app_port = var.app_port
+}

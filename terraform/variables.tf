@@ -33,3 +33,9 @@ variable "nat_count" {
   type        = number
   default     = 1
 }
+
+variable "app_port" {
+  description = "Port the application listens on"
+  type        = number
+  default     = 8080
+}
