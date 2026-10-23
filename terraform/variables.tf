@@ -39,3 +39,15 @@ variable "app_port" {
   type        = number
   default     = 8080
 }
+
+variable "db_multi_az" {
+  description = "RDS Multi-AZ: false for the cheap demo, true for production HA"
+  type        = bool
+  default     = false
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}

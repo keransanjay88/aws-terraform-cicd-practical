@@ -58,3 +58,30 @@ module "s3" {
   logs_bucket_name = local.logs_bucket_name
   account_id       = local.account_id
 }
+
+module "rds" {
+  source = "./modules/rds"
+
+  project       = var.project
+  db_subnet_ids = module.network.db_subnet_ids
+  rds_sg_id     = module.security.rds_sg_id
+  db_name       = module.secrets.db_name
+  db_username   = module.secrets.db_username
+  db_password   = module.secrets.db_password
+  multi_az      = var.db_multi_az
+  instance_class = var.db_instance_class
+}
+
+# Store the full credentials in the secret once the database exists
+resource "aws_secretsmanager_secret_version" "db" {
+  secret_id = module.secrets.secret_id
+
+  secret_string = jsonencode({
+    username = module.secrets.db_username
+    password = module.secrets.db_password
+    host     = module.rds.address
+    port     = module.rds.port
+    dbname   = module.secrets.db_name
+    engine   = "mysql"
+  })
+}

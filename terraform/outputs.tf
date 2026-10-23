@@ -25,3 +25,7 @@ output "app_bucket_name" {
 output "logs_bucket_name" {
   value = module.s3.logs_bucket_name
 }
+
+output "rds_endpoint" {
+  value = module.rds.address
+}
