@@ -50,3 +50,11 @@ module "secrets" {
 
   secret_name = local.secret_name
 }
+
+module "s3" {
+  source = "./modules/s3"
+
+  app_bucket_name  = local.app_bucket_name
+  logs_bucket_name = local.logs_bucket_name
+  account_id       = local.account_id
+}

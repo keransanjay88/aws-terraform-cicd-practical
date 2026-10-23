@@ -17,3 +17,11 @@ output "db_subnet_ids" {
 output "ec2_role_arn" {
   value = module.iam.role_arn
 }
+
+output "app_bucket_name" {
+  value = module.s3.app_bucket_name
+}
+
+output "logs_bucket_name" {
+  value = module.s3.logs_bucket_name
+}
